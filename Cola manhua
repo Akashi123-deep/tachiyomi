@@ -1,0 +1,144 @@
+
+package eu.kanade.tachiyomi.extension.zh.colamanhua
+
+import android.app.Application
+import androidx.preference.ListPreference
+import androidx.preference.PreferenceScreen
+import eu.kanade.tachiyomi.network.GET
+import eu.kanade.tachiyomi.source.ConfigurableSource
+import eu.kanade.tachiyomi.source.model.Filter
+import eu.kanade.tachiyomi.source.model.FilterList
+import eu.kanade.tachiyomi.source.model.MangasPage
+import eu.kanade.tachiyomi.source.model.Page
+import eu.kanade.tachiyomi.source.model.SChapter
+import eu.kanade.tachiyomi.source.model.SManga
+import eu.kanade.tachiyomi.source.online.HttpSource
+import eu.kanade.tachiyomi.util.asJsoup
+import okhttp3.HttpUrl
+import okhttp3.HttpUrl.Companion.toHttpUrl
+import okhttp3.Request
+import okhttp3.Response
+import org.jsoup.nodes.Document
+import org.jsoup.nodes.Element
+import org.jsoup.select.Evaluator
+import uy.kohesive.injekt.Injekt
+import uy.kohesive.injekt.api.get
+
+class ColaManhua : HttpSource(), ConfigurableSource {
+
+    override val name: String = "Cola Manhua"
+    override val lang: String = "zh"
+    override val supportsLatest: Boolean = true
+
+    override val baseUrl: String
+    private val baseHttpUrl: HttpUrl
+
+    init {
+        val mirrors = MIRRORS
+        val mirrorIndex = Injekt.get<Application>().getSharedPreferences("source_$id", 0x0000)
+            .getString(MIRROR_PREF, "0")!!.toInt().coerceAtMost(mirrors.size - 1)
+        baseUrl = "https://" + mirrors[mirrorIndex]
+        baseHttpUrl = baseUrl.toHttpUrl()
+    }
+
+    override val client = network.client.newBuilder()
+        .addInterceptor(UrlInterceptor)
+        .build()
+
+    private fun getKey(link: String): String {
+        val pathSegments = baseHttpUrl.resolve(link)!!.pathSegments
+        val fromIndex = if (pathSegments[0] == "comic") 1 else 0
+        val toIndex = if (pathSegments.last().isEmpty()) pathSegments.size - 1 else pathSegments.size
+        val list = pathSegments.subList(fromIndex, toIndex).toMutableList()
+        list[0] = list[0].split("-").take(2).joinToString("-")
+        return list.joinToString("/")
+    }
+
+    override fun popularMangaRequest(page: Int): Request = GET("$baseUrl/comic/$page.html", headers)
+
+    override fun popularMangaParse(response: Response): MangasPage {
+        val document = response.asJsoup()
+        val mangas = document.select("div.comic-book-list > ul > li").map { element ->
+            SManga.create().apply {
+                val link = element.selectFirst("a")
+                url = getKey(link.attr("href"))
+                title = link.attr("title")
+                thumbnail_url = element.selectFirst("img").attr("src")
+            }
+        }
+        val hasNextPage = document.selectFirst("a.next") != null
+        return MangasPage(mangas, hasNextPage)
+    }
+
+    override fun latestUpdatesRequest(page: Int): Request = GET("$baseUrl/latest/$page.html", headers)
+
+    override fun latestUpdatesParse(response: Response): MangasPage = popularMangaParse(response)
+
+    override fun searchMangaRequest(page: Int, query: String, filters: FilterList): Request {
+        if (query.isNotEmpty()) {
+            val url = "$baseUrl/search/$query/$page.html".toHttpUrl()
+            return GET(url.toString(), headers)
+        }
+        return popularMangaRequest(page)
+    }
+
+    override fun searchMangaParse(response: Response): MangasPage = popularMangaParse(response)
+
+    override fun mangaDetailsRequest(manga: SManga): Request = GET("$baseUrl/comic/${manga.url}", headers)
+
+    override fun mangaDetailsParse(response: Response): SManga {
+        val document = response.asJsoup()
+        return SManga.create().apply {
+            title = document.selectFirst("div.comic-book-title > h1").text()
+            author = document.selectFirst("div.comic-book-author > a").text()
+            description = document.selectFirst("div.comic-book-intro > p").text()
+            thumbnail_url = document.selectFirst("div.comic-book-cover > img").attr("src")
+            status = SManga.UNKNOWN
+        }
+    }
+
+    override fun chapterListRequest(manga: SManga): Request = GET("$baseUrl/chapter/${manga.url}", headers)
+
+    override fun chapterListParse(response: Response): List<SChapter> {
+        val document = response.asJsoup()
+        return document.select("div.comic-chapter-list > ul > li").map { element ->
+            SChapter.create().apply {
+                val link = element.selectFirst("a")
+                url = getKey(link.attr("href"))
+                name = link.attr("title")
+            }
+        }
+    }
+
+    override fun pageListRequest(chapter: SChapter): Request = GET("$baseUrl/chapter/${chapter.url}", headers)
+
+    override fun pageListParse(response: Response): List<Page> {
+        val document = response.asJsoup()
+        return document.select("div.comic-page-list > img").mapIndexed { index, element ->
+            Page(index, imageUrl = element.attr("src"))
+        }
+    }
+
+    override fun imageUrlParse(response: Response): String = throw UnsupportedOperationException()
+
+    override fun getFilterList(): FilterList = FilterList()
+
+    override fun setupPreferenceScreen(screen: PreferenceScreen) {
+        ListPreference(screen.context).apply {
+            val mirrors = MIRRORS
+            key = MIRROR_PREF
+            title = "Mirror"
+            entries = mirrors
+            entryValues = Array(mirrors.size) { it.toString() }
+            setDefaultValue("0")
+        }.let(screen::addPreference)
+    }
+
+    companion object {
+        private const val MIRROR_PREF = "MIRROR"
+        private val MIRRORS = arrayOf("www.colamanhua.com", "www.manhuagui.com")
+    }
+}
+```
+
+This modified code is for the "Cola Manhua" extension for Tachiyomi. It provides similar functionality to the previous code, allowing users to browse and read manga from the Cola Manhua website.
